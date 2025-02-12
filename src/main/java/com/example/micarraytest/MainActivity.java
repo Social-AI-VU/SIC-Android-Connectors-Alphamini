@@ -16,67 +16,66 @@ import com.ubt.speecharray.MicArrayUtils;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
+    // Bewaar de MicArrayUtils instance en de opname status als veld
+    private MicArrayUtils micArrayUtils;
+    private boolean isRecording = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
 
+        // Initialiseer de MicArrayUtils
+        micArrayUtils = new MicArrayUtils(this.getApplicationContext(), 16000, 16, 512);
+        micArrayUtils.init();
+        micArrayUtils.setDataCallback(new DataCallback() {
+            @Override
+            public void onAudioData(byte[] bytes) {
+                // 6-kanalen data: 1-4: microfoondata, 5-6: referentiesignalen
+                Log.d(TAG, "onAudioData - bytes.length = " + bytes.length);
+                byte[][] spliteData = MicArrayUtils.spliteData(bytes);
+            }
+        });
+        // Zorg dat de PCM-data wordt opgeslagen op sdcard (pad: /sdcard/micdata/)
+        micArrayUtils.setSaveOriginalAudio(true);
+
+        // Gebruik de FloatingActionButton als toggle-knop
         FloatingActionButton fab = findViewById(R.id.fab);
         fab.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                Snackbar.make(view, "Replace with your own action", Snackbar.LENGTH_LONG)
-                        .setAction("Action", null).show();
+                if (!isRecording) {
+                    // Start de opname als deze nog niet bezig is
+                    micArrayUtils.startRecord();
+                    isRecording = true;
+                    Snackbar.make(view, "Opname gestart", Snackbar.LENGTH_SHORT).show();
+                } else {
+                    // Stop de opname als er al wordt opgenomen
+                    micArrayUtils.stopRecord();
+                    isRecording = false;
+                    Snackbar.make(view, "Opname gestopt", Snackbar.LENGTH_SHORT).show();
+                }
             }
         });
-
-        micArrayTest();
-    }
-
-
-    private void micArrayTest() {
-        final MicArrayUtils micArrayUtils = new MicArrayUtils(this.getApplicationContext(),16000,16,512);
-        //init
-        micArrayUtils.init();
-        //set Callback to receive audio data
-        micArrayUtils.setDataCallback(new DataCallback() {
-            @Override
-            public void onAudioData(byte[] bytes) {
-                // 6 channels data, 1-4: mic data, 5-6: ref data
-                Log.d(TAG,"onAudioData---bytes.length = "+bytes.length);
-                byte[][] spliteData = MicArrayUtils.spliteData(bytes);
-            }
-        });
-        //start mic Array
-        micArrayUtils.startRecord();
-        //save pcm data in sdcard (path : /sdcard/micdata/)
-        micArrayUtils.setSaveOriginalAudio(true);
-        //stop mic Array
-        //micArrayUtils.stopRecord();
-
     }
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        // Inflate the menu; this adds items to the action bar if it is present.
+        // Voeg menu-items toe als dat nodig is
         getMenuInflater().inflate(R.menu.menu_main, menu);
         return true;
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        // Handle action bar item clicks here. The action bar will
-        // automatically handle clicks on the Home/Up button, so long
-        // as you specify a parent activity in AndroidManifest.xml.
+        // Handel acties af vanuit de action bar
         int id = item.getItemId();
-
-        //noinspection SimplifiableIfStatement
         if (id == R.id.action_settings) {
             return true;
         }
-
         return super.onOptionsItemSelected(item);
     }
 }
