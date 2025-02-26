@@ -7,18 +7,20 @@ import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
 import android.util.Log;
 import android.view.View;
-import android.view.Menu;
-import android.view.MenuItem;
-
 import com.ubt.speecharray.DataCallback;
 import com.ubt.speecharray.MicArrayUtils;
+import java.io.OutputStream;
+import java.net.Socket;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
-    // Bewaar de MicArrayUtils instance en de opname status als veld
     private MicArrayUtils micArrayUtils;
     private boolean isRecording = false;
+    private Socket socket;
+    private OutputStream outputStream;
+    private static final String SERVER_IP = "10.0.0.107"; // Change to your PC/server IP
+    private static final int SERVER_PORT = 5000;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -28,54 +30,65 @@ public class MainActivity extends AppCompatActivity {
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
 
-        // Initialiseer de MicArrayUtils
         micArrayUtils = new MicArrayUtils(this.getApplicationContext(), 16000, 16, 512);
         micArrayUtils.init();
         micArrayUtils.setDataCallback(new DataCallback() {
             @Override
             public void onAudioData(byte[] bytes) {
-                // 6-kanalen data: 1-4: microfoondata, 5-6: referentiesignalen
                 Log.d(TAG, "onAudioData - bytes.length = " + bytes.length);
-                byte[][] spliteData = MicArrayUtils.spliteData(bytes);
+                if (outputStream != null) {
+                    try {
+                        outputStream.write(bytes);
+                        outputStream.flush();
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error sending audio data", e);
+                    }
+                }
             }
         });
-        // Zorg dat de PCM-data wordt opgeslagen op sdcard (pad: /sdcard/micdata/)
-        micArrayUtils.setSaveOriginalAudio(true);
 
-        // Gebruik de FloatingActionButton als toggle-knop
         FloatingActionButton fab = findViewById(R.id.fab);
         fab.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 if (!isRecording) {
-                    // Start de opname als deze nog niet bezig is
+                    startStreaming();
                     micArrayUtils.startRecord();
                     isRecording = true;
-                    Snackbar.make(view, "Opname gestart", Snackbar.LENGTH_SHORT).show();
+                    Snackbar.make(view, "Streaming started", Snackbar.LENGTH_SHORT).show();
                 } else {
-                    // Stop de opname als er al wordt opgenomen
                     micArrayUtils.stopRecord();
+                    stopStreaming();
                     isRecording = false;
-                    Snackbar.make(view, "Opname gestopt", Snackbar.LENGTH_SHORT).show();
+                    Snackbar.make(view, "Streaming stopped", Snackbar.LENGTH_SHORT).show();
                 }
             }
         });
     }
 
-    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        // Voeg menu-items toe als dat nodig is
-        getMenuInflater().inflate(R.menu.menu_main, menu);
-        return true;
+    private void startStreaming() {
+        new Thread(() -> {
+            try {
+                socket = new Socket(SERVER_IP, SERVER_PORT);
+                outputStream = socket.getOutputStream();
+                Log.d(TAG, "Connected to server");
+            } catch (Exception e) {
+                Log.e(TAG, "Error connecting to server", e);
+            }
+        }).start();
     }
 
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        // Handel acties af vanuit de action bar
-        int id = item.getItemId();
-        if (id == R.id.action_settings) {
-            return true;
+    private void stopStreaming() {
+        try {
+            if (outputStream != null) {
+                outputStream.close();
+            }
+            if (socket != null) {
+                socket.close();
+            }
+            Log.d(TAG, "Disconnected from server");
+        } catch (Exception e) {
+            Log.e(TAG, "Error closing connection", e);
         }
-        return super.onOptionsItemSelected(item);
     }
 }
