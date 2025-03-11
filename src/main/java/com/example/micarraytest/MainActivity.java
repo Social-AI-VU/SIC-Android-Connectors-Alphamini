@@ -16,7 +16,7 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
     private MicArrayUtils micArrayUtils;
-    private boolean isRecording = false;
+    private boolean isConnected = false;
     private Socket socket;
     private OutputStream outputStream;
     private static final String SERVER_IP = "10.0.0.107"; // Change to your PC/server IP
@@ -42,6 +42,8 @@ public class MainActivity extends AppCompatActivity {
                         outputStream.flush();
                     } catch (Exception e) {
                         Log.e(TAG, "Error sending audio data", e);
+                        // Try to reconnect if there's an error
+                        reconnectToServer();
                     }
                 }
             }
@@ -51,19 +53,18 @@ public class MainActivity extends AppCompatActivity {
         fab.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                if (!isRecording) {
-                    startStreaming();
-                    micArrayUtils.startRecord();
-                    isRecording = true;
-                    Snackbar.make(view, "Streaming started", Snackbar.LENGTH_SHORT).show();
+                if (!isConnected) {
+                    Snackbar.make(view, "Reconnecting to server...", Snackbar.LENGTH_SHORT).show();
+                    reconnectToServer();
                 } else {
-                    micArrayUtils.stopRecord();
-                    stopStreaming();
-                    isRecording = false;
-                    Snackbar.make(view, "Streaming stopped", Snackbar.LENGTH_SHORT).show();
+                    Snackbar.make(view, "Already connected and streaming", Snackbar.LENGTH_SHORT).show();
                 }
             }
         });
+
+        // Start streaming automatically when the app launches
+        startStreaming();
+        micArrayUtils.startRecord();
     }
 
     private void startStreaming() {
@@ -71,24 +72,56 @@ public class MainActivity extends AppCompatActivity {
             try {
                 socket = new Socket(SERVER_IP, SERVER_PORT);
                 outputStream = socket.getOutputStream();
+                isConnected = true;
                 Log.d(TAG, "Connected to server");
+                runOnUiThread(() -> {
+                    Snackbar.make(findViewById(R.id.fab), "Connected to server", Snackbar.LENGTH_SHORT).show();
+                });
             } catch (Exception e) {
                 Log.e(TAG, "Error connecting to server", e);
+                isConnected = false;
+                runOnUiThread(() -> {
+                    Snackbar.make(findViewById(R.id.fab), "Connection failed: " + e.getMessage(), Snackbar.LENGTH_LONG).show();
+                });
+                // Try again after a delay
+                try {
+                    Thread.sleep(5000);
+                    if (!isConnected) {
+                        runOnUiThread(() -> startStreaming());
+                    }
+                } catch (InterruptedException ie) {
+                    Log.e(TAG, "Sleep interrupted", ie);
+                }
             }
         }).start();
     }
 
+    private void reconnectToServer() {
+        stopStreaming();
+        startStreaming();
+    }
+
     private void stopStreaming() {
         try {
+            isConnected = false;
             if (outputStream != null) {
                 outputStream.close();
+                outputStream = null;
             }
             if (socket != null) {
                 socket.close();
+                socket = null;
             }
             Log.d(TAG, "Disconnected from server");
         } catch (Exception e) {
             Log.e(TAG, "Error closing connection", e);
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        micArrayUtils.stopRecord();
+        stopStreaming();
+        super.onDestroy();
     }
 }
