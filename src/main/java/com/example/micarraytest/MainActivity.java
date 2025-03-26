@@ -11,6 +11,11 @@ import com.ubt.speecharray.DataCallback;
 import com.ubt.speecharray.MicArrayUtils;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.SocketException;
+import java.util.Enumeration;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -19,7 +24,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean isConnected = false;
     private Socket socket;
     private OutputStream outputStream;
-    private static final String SERVER_IP = "10.0.0.107"; // Change to your PC/server IP
+    private String SERVER_IP;  // retrieve local IP address
     private static final int SERVER_PORT = 5000;
 
     @Override
@@ -29,6 +34,9 @@ public class MainActivity extends AppCompatActivity {
 
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
+
+        SERVER_IP = getLocalIpAddress(); // dynamically assign local IP
+        Log.d(TAG, "Local IP address: " + SERVER_IP);
 
         micArrayUtils = new MicArrayUtils(this.getApplicationContext(), 16000, 16, 1024);
         micArrayUtils.init();
@@ -118,6 +126,22 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private String getLocalIpAddress() {
+        try {
+            for (Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces(); en.hasMoreElements(); ) {
+                NetworkInterface intf = en.nextElement();
+                for (Enumeration<InetAddress> enumIpAddr = intf.getInetAddresses(); enumIpAddr.hasMoreElements(); ) {
+                    InetAddress inetAddress = enumIpAddr.nextElement();
+                    if (!inetAddress.isLoopbackAddress() && inetAddress instanceof Inet4Address) {
+                        return inetAddress.getHostAddress();
+                    }
+                }
+            }
+        } catch (SocketException ex) {
+            ex.printStackTrace();
+        }
+        return null;
+    }
     @Override
     protected void onDestroy() {
         micArrayUtils.stopRecord();
