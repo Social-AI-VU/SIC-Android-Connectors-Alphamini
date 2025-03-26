@@ -30,7 +30,7 @@ public class MainActivity extends AppCompatActivity {
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
 
-        micArrayUtils = new MicArrayUtils(this.getApplicationContext(), 16000, 16, 512);
+        micArrayUtils = new MicArrayUtils(this.getApplicationContext(), 16000, 16, 1024);
         micArrayUtils.init();
         micArrayUtils.setDataCallback(new DataCallback() {
             @Override
