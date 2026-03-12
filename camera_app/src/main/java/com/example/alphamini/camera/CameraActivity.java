@@ -1,6 +1,10 @@
 package com.example.alphamini.camera;
 
 import android.Manifest;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
@@ -28,6 +32,7 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
     private static final int REQ_CAMERA = 100;
     private static final String TAG = "CameraActivity";
     private static final int SERVER_PORT = 6001;
+    private static final String ACTION_STOP = "com.example.alphamini.camera.ACTION_STOP";
 
     private Camera camera;
     private SurfaceView surfaceView;
@@ -40,14 +45,82 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
 
     // Background sender thread and frame queue to avoid NetworkOnMainThreadException
     private Thread senderThread;
-    private final BlockingQueue<byte[]> frameQueue = new LinkedBlockingQueue<>(3);
+    private BlockingQueue<FramePacket> frameQueue;
+
+    // Configurable parameters passed via intent extras (with sensible defaults)
+    private int frameStride = 1;
+    private int queueSize = 1;
+    private int jpegQuality = 60;
+    private int targetWidth = 0;
+    private int targetHeight = 0;
+    private float scaleFactor = 1.0f;
     private int frameCounter = 0;
+
+    // Broadcast receiver to allow external controllers (e.g. Termux/SIC) to request shutdown.
+    private BroadcastReceiver stopReceiver;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // If this activity was launched with a control intent requesting shutdown,
+        // honour it immediately and avoid setting up any camera or networking.
+        if (handleControlIntent(getIntent())) {
+            return;
+        }
+
+        // Register a broadcast receiver for external stop requests.
+        stopReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null) {
+                    return;
+                }
+                if (ACTION_STOP.equals(intent.getAction())) {
+                    Log.i(TAG, "Received ACTION_STOP broadcast, shutting down CameraActivity");
+                    stopStreaming();
+                    if (camera != null) {
+                        try {
+                            camera.stopPreview();
+                        } catch (RuntimeException ignored) {
+                        }
+                        camera.release();
+                        camera = null;
+                    }
+                    finish();
+                }
+            }
+        };
+        registerReceiver(stopReceiver, new IntentFilter(ACTION_STOP));
+
         surfaceView = new SurfaceView(this);
         setContentView(surfaceView);
+
+        // Read optional configuration extras from the launching intent
+        if (getIntent() != null) {
+            jpegQuality = getIntent().getIntExtra("jpeg_quality", jpegQuality);
+            targetWidth = getIntent().getIntExtra("target_width", targetWidth);
+            targetHeight = getIntent().getIntExtra("target_height", targetHeight);
+            int scaleInt = getIntent().getIntExtra("scale_factor", 10000); // 1.0 * 10000
+            scaleFactor = scaleInt / 10000f;
+        }
+
+        if (frameStride < 1) {
+            frameStride = 1;
+        }
+        if (queueSize < 1) {
+            queueSize = 1;
+        }
+        if (jpegQuality < 0) {
+            jpegQuality = 0;
+        } else if (jpegQuality > 100) {
+            jpegQuality = 100;
+        }
+        if (scaleFactor <= 0.0f) {
+            scaleFactor = 1.0f;
+        }
+
+        frameQueue = new LinkedBlockingQueue<>(queueSize);
 
         surfaceHolder = surfaceView.getHolder();
         surfaceHolder.addCallback(this);
@@ -65,24 +138,93 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+
+        // Handle control intents sent to an existing instance (e.g. from Termux via "am start").
+        if (handleControlIntent(intent)) {
+            return;
+        }
+    }
+
+    /**
+     * Handle control extras sent via the launching intent.
+     *
+     * Currently supports:
+     *  - stop_activity=true : cleanly stop streaming, release camera, and finish the activity.
+     *
+     * @param intent The intent used to launch or re-launch this activity.
+     * @return true if the intent requested an immediate shutdown and was handled.
+     */
+    private boolean handleControlIntent(Intent intent) {
+        if (intent == null) {
+            return false;
+        }
+
+        boolean shouldStop = intent.getBooleanExtra("stop_activity", false);
+        if (!shouldStop) {
+            return false;
+        }
+
+        Log.i(TAG, "Received stop_activity control intent, shutting down CameraActivity");
+
+        // Clean shutdown path invoked from an external controller (e.g. SIC MiniCameraSensor).
+        stopStreaming();
+        if (camera != null) {
+            try {
+                camera.stopPreview();
+            } catch (RuntimeException ignored) {
+            }
+            camera.release();
+            camera = null;
+        }
+        finish();
+        return true;
+    }
+
+    @Override
     public void surfaceCreated(SurfaceHolder holder) {
         try {
             camera = Camera.open();
             Camera.Parameters params = camera.getParameters();
 
-            // Choose a smaller preview size to reduce bandwidth and CPU
-            Camera.Size chosen = params.getPreferredPreviewSizeForVideo();
+            // Determine base/default preview size
+            Camera.Size base = params.getPreferredPreviewSizeForVideo();
             List<Camera.Size> sizes = params.getSupportedPreviewSizes();
-            if (sizes != null && !sizes.isEmpty()) {
-                // Fallback: pick the smallest available size
-                if (chosen == null) {
-                    chosen = sizes.get(0);
-                    for (Camera.Size s : sizes) {
-                        if (s.width * s.height < chosen.width * chosen.height) {
-                            chosen = s;
-                        }
+            if (base == null && sizes != null && !sizes.isEmpty()) {
+                // Fallback: pick the first supported size as the base
+                base = sizes.get(0);
+            }
+
+            Camera.Size chosen = base;
+
+            if (sizes != null && !sizes.isEmpty() && base != null) {
+                int desiredWidth = base.width;
+                int desiredHeight = base.height;
+
+                // If a specific resolution was requested, use that as desired size
+                if (targetWidth > 0 && targetHeight > 0) {
+                    desiredWidth = targetWidth;
+                    desiredHeight = targetHeight;
+                }
+
+                // Apply fractional scaling to the desired size, preserving aspect ratio
+                if (scaleFactor != 1.0f) {
+                    desiredWidth = Math.max(1, Math.round(desiredWidth * scaleFactor));
+                    desiredHeight = Math.max(1, Math.round(desiredHeight * scaleFactor));
+                }
+
+                // Find the supported size closest to the desired size
+                int bestDiff = Integer.MAX_VALUE;
+                for (Camera.Size s : sizes) {
+                    int diff = Math.abs(s.width - desiredWidth) + Math.abs(s.height - desiredHeight);
+                    if (diff < bestDiff) {
+                        bestDiff = diff;
+                        chosen = s;
                     }
                 }
+
                 params.setPreviewSize(chosen.width, chosen.height);
                 camera.setParameters(params);
             }
@@ -122,6 +264,13 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (stopReceiver != null) {
+            try {
+                unregisterReceiver(stopReceiver);
+            } catch (IllegalArgumentException ignored) {
+            }
+            stopReceiver = null;
+        }
         if (camera != null) {
             camera.release();
             camera = null;
@@ -140,12 +289,14 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
                 senderThread = new Thread(() -> {
                     while (isConnected && !Thread.currentThread().isInterrupted()) {
                         try {
-                            byte[] jpegBytes = frameQueue.take();
+                            FramePacket packet = frameQueue.take();
                             if (dataOutputStream == null) {
                                 continue;
                             }
-                            dataOutputStream.writeInt(jpegBytes.length);
-                            dataOutputStream.write(jpegBytes);
+                            // Write 8-byte capture timestamp (ms since epoch) followed by 4-byte length and JPEG bytes
+                            dataOutputStream.writeLong(packet.timestampMs);
+                            dataOutputStream.writeInt(packet.jpegBytes.length);
+                            dataOutputStream.write(packet.jpegBytes);
                             dataOutputStream.flush();
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
@@ -195,9 +346,9 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
         }
 
         try {
-            // Drop 2 out of every 3 frames to reduce load
+            // Optional frame stride to reduce load: send every Nth preview frame
             frameCounter++;
-            if (frameCounter % 3 != 0) {
+            if (frameCounter % frameStride != 0) {
                 return;
             }
 
@@ -215,12 +366,13 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
 
             YuvImage yuvImage = new YuvImage(data, format, width, height, null);
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            // Lower JPEG quality to reduce size and latency
-            yuvImage.compressToJpeg(new Rect(0, 0, width, height), 60, baos);
+            // Configurable JPEG quality to trade off size vs. fidelity
+            yuvImage.compressToJpeg(new Rect(0, 0, width, height), jpegQuality, baos);
             byte[] jpegBytes = baos.toByteArray();
 
             // Enqueue frame for background sender thread; drop if queue is full
-            frameQueue.offer(jpegBytes);
+            FramePacket packet = new FramePacket(System.currentTimeMillis(), jpegBytes);
+            frameQueue.offer(packet);
         } catch (Exception e) {
             Log.e(TAG, "Error preparing frame, reconnecting", e);
             isConnected = false;
@@ -228,5 +380,15 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
             startStreaming();
         }
     }
-}
 
+    // Simple container for a single frame and its capture timestamp
+    private static class FramePacket {
+        final long timestampMs;
+        final byte[] jpegBytes;
+
+        FramePacket(long timestampMs, byte[] jpegBytes) {
+            this.timestampMs = timestampMs;
+            this.jpegBytes = jpegBytes;
+        }
+    }
+}
