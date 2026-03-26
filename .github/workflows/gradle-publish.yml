@@ -35,16 +35,16 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
 
-      - name: Build release APKs
-        run: ./gradlew --no-daemon :camera_app:assembleRelease :mic_app:assembleRelease -x lint -x lintVitalRelease
+      - name: Build debug APKs
+        run: ./gradlew --no-daemon :camera_app:assembleDebug :mic_app:assembleDebug
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: alphamini-release-apks
+          name: alphamini-debug-apks
           path: |
-            camera_app/build/outputs/apk/release/*.apk
-            mic_app/build/outputs/apk/release/*.apk
+            camera_app/build/outputs/apk/debug/*.apk
+            mic_app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
       - name: Attach APKs to GitHub Release
@@ -52,5 +52,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            camera_app/build/outputs/apk/release/*.apk
-            mic_app/build/outputs/apk/release/*.apk
+            camera_app/build/outputs/apk/debug/*.apk
+            mic_app/build/outputs/apk/debug/*.apk
