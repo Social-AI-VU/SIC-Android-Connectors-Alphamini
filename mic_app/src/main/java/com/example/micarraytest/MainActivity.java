@@ -1,5 +1,9 @@
 package com.example.micarraytest;
 
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.Bundle;
 import android.support.design.widget.FloatingActionButton;
 import android.support.design.widget.Snackbar;
@@ -20,17 +24,37 @@ import java.util.Enumeration;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
+    private static final String ACTION_STOP = "com.example.micarraytest.ACTION_STOP";
     private MicArrayUtils micArrayUtils;
     private boolean isConnected = false;
     private Socket socket;
     private OutputStream outputStream;
     private String SERVER_IP;  // retrieve local IP address
     private static final int SERVER_PORT = 5000;
+    private BroadcastReceiver stopReceiver;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        stopReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null) {
+                    return;
+                }
+                if (ACTION_STOP.equals(intent.getAction())) {
+                    Log.i(TAG, "Received ACTION_STOP broadcast, shutting down MainActivity");
+                    if (micArrayUtils != null) {
+                        micArrayUtils.stopRecord();
+                    }
+                    stopStreaming();
+                    finish();
+                }
+            }
+        };
+        registerReceiver(stopReceiver, new IntentFilter(ACTION_STOP));
 
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
@@ -145,9 +169,17 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        micArrayUtils.stopRecord();
+        if (stopReceiver != null) {
+            try {
+                unregisterReceiver(stopReceiver);
+            } catch (IllegalArgumentException ignored) {
+            }
+            stopReceiver = null;
+        }
+        if (micArrayUtils != null) {
+            micArrayUtils.stopRecord();
+        }
         stopStreaming();
         super.onDestroy();
     }
 }
-
